@@ -48,7 +48,7 @@ def find_canvas_files(root: Path, output_dir: Path) -> list[Path]:
 def print_affected_directories(paths: list[Path], root: Path) -> None:
     directories = sorted({path.parent for path in paths})
 
-    print("Adresare, kterych se transformace bude tykat:")
+    print("Directories affected by the export:")
     for directory in directories:
         print(f"- {safe_display(directory.relative_to(root))}")
 
@@ -732,7 +732,7 @@ def create_mode_js_file(output_dir: Path) -> Path:
       button.textContent = mode === "dark" ? "light" : "dark";
       button.setAttribute(
         "aria-label",
-        mode === "dark" ? "Přepnout na světlý režim" : "Přepnout na tmavý režim"
+        mode === "dark" ? "Switch to light mode" : "Switch to dark mode"
       );
     });
   }
@@ -856,27 +856,27 @@ def create_export_index(output_dir: Path, css_file: Path) -> Path:
         "<html>\n"
         "<head>\n"
         '  <meta charset="utf-8">\n'
-        "  <title>Exportovane soubory</title>\n"
+        "  <title>Exported files</title>\n"
         f'  <script src="{mode_js_href}"></script>\n'
         f'  <link rel="stylesheet" href="{css_href}">\n'
         f'  <script src="{jquery_href}"></script>\n'
         "</head>\n"
         "<body class=\"index-page\">\n"
         '<button type="button" class="mode-toggle" data-mode-toggle>dark</button>\n'
-        "<h1>Exportovane soubory</h1>\n"
+        "<h1>Exported files</h1>\n"
         "<p class=\"index-meta\">"
-        f"Index obsahuje {directory_count} adresářů a celkem {file_count} souborů. "
-        f"Byl vytvořen {escape(created_at)}."
+        f"The index contains {directory_count} directories and {file_count} files. "
+        f"Created at {escape(created_at)}."
         "</p>\n"
         "<div class=\"index-toolbar\">"
-        '<button type="button" id="toggle-all">rozbalit vše</button>'
+        '<button type="button" id="toggle-all">expand all</button>'
         "</div>\n"
         f"{tree}\n"
         "<script>\n"
         "$(function () {\n"
         "  function updateToggleButton() {\n"
         "    var anyCollapsed = $('.root-directory.collapsed').length > 0;\n"
-        "    $('#toggle-all').text(anyCollapsed ? 'rozbalit vše' : 'sbalit vše');\n"
+        "    $('#toggle-all').text(anyCollapsed ? 'expand all' : 'collapse all');\n"
         "  }\n"
         "\n"
         "  $('.root-directory > .directory-label').on('click', function () {\n"
@@ -930,7 +930,7 @@ def transform_markdown_to_html(
     )
 
     if ambiguous_links:
-        print("Nejednoznacne wiki odkazy, ktere nebudou automaticky propojene:")
+        print("Ambiguous wiki links that will not be linked automatically:")
         for link in sorted(ambiguous_links):
             print(f"- {safe_display(link)}")
 
@@ -974,7 +974,7 @@ def transform_markdown_to_html(
             target,
         )
         target.write_text(html, encoding="utf-8")
-        print(f"Transformovano: {safe_display(path)} -> {safe_display(target)}")
+        print(f"Transformed: {safe_display(path)} -> {safe_display(target)}")
 
 
 def transform_canvas_to_html(
@@ -989,7 +989,7 @@ def transform_canvas_to_html(
 
     for helper_file in [light_css_file, canvas_css_file, canvas_js_file]:
         if not helper_file.exists():
-            print(f"Chybi canvas pomocny soubor: {safe_display(helper_file)}")
+            print(f"Missing canvas helper file: {safe_display(helper_file)}")
 
     for path in paths:
         relative_canvas_path = path.relative_to(source_dir)
@@ -1023,7 +1023,7 @@ def transform_canvas_to_html(
             build_canvas_wiki_links(wiki_link_index, html_target),
         )
         html_target.write_text(html, encoding="utf-8")
-        print(f"Canvas transformovan: {safe_display(path)} -> {safe_display(html_target)}")
+        print(f"Canvas transformed: {safe_display(path)} -> {safe_display(html_target)}")
 
 
 def transform_sources_to_html(
@@ -1046,7 +1046,7 @@ def transform_sources_to_html(
     )
     transform_canvas_to_html(canvas_paths, source_dir, output_dir, wiki_link_index)
     index_file = create_export_index(output_dir, css_file)
-    print(f"Vytvoren index: {safe_display(index_file)}")
+    print(f"Created index: {safe_display(index_file)}")
 
 
 if __name__ == "__main__":
@@ -1058,12 +1058,12 @@ if __name__ == "__main__":
     source_files = markdown_files + canvas_files
 
     if not source_files:
-        print("Nebyly nalezeny zadne soubory *.md ani *.canvas.")
+        print("No *.md or *.canvas files found.")
     else:
         print_affected_directories(source_files, source_directory)
-        answer = input("Spustit transformaci? [ano/ne]: ").strip().lower()
+        answer = input("Run export? [yes/no]: ").strip().lower()
 
-        if answer in {"ano", "a"}:
+        if answer in {"yes", "y"}:
             transform_sources_to_html(
                 markdown_files,
                 canvas_files,
@@ -1072,4 +1072,4 @@ if __name__ == "__main__":
                 output_directory,
             )
         else:
-            print("Akce zrusena.")
+            print("Action canceled.")

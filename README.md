@@ -42,19 +42,19 @@ python py_md_transform.py
 ```
 
 The script prints the affected source directories and asks for confirmation.
-Answer `ano` or `a` to generate the export.
+Answer `yes` or `y` to generate the export.
 
 For non-interactive use:
 
 ```bash
-printf "ano\n" | python py_md_transform.py
+printf "yes\n" | python py_md_transform.py
 ```
 
 On Windows PowerShell:
 
 ```powershell
 @'
-ano
+yes
 '@ | python py_md_transform.py
 ```
 
@@ -143,5 +143,5 @@ python -m py_compile py_md_transform.py
 Full export check:
 
 ```bash
-printf "ano\n" | python py_md_transform.py
+printf "yes\n" | python py_md_transform.py
 ```
