@@ -12,6 +12,7 @@ LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]]+)\]\]")
 AUTO_LINK_PATTERN = re.compile(r"(?<![\"'=])\bhttps?://[^\s<>()]+[^\s<>().,;:!?]")
 INDEX_IGNORED_DIRECTORIES = {"css", "js"}
+SRC_LIB_DIRECTORY = "src_lib"
 
 
 def safe_display(value: object) -> str:
@@ -140,9 +141,26 @@ def transform_inline_markdown(
             for segment in segments
         )
 
+    def apply_basic_inline_styles(value: str) -> str:
+        value = re.sub(r"==(.+?)==", r"<mark>\1</mark>", value)
+        value = re.sub(r"(?<!\*)\*\*\*(?!\s)(.+?)(?<!\s)\*\*\*(?!\*)", r"<strong><em>\1</em></strong>", value)
+        value = re.sub(r"(?<!\*)\*\*(?!\s)(.+?)(?<!\s)\*\*(?!\*)", r"<strong>\1</strong>", value)
+        value = re.sub(r"(?<!\*)\*(?![\s*])(.+?)(?<![\s*])\*(?!\*)", r"<em>\1</em>", value)
+        return value
+
+    def style_text_segments(value: str) -> str:
+        segments = re.split(r"(<a\b[^>]*>.*?</a>)", value, flags=re.IGNORECASE)
+        return "".join(
+            segment
+            if segment.lower().startswith("<a")
+            else apply_basic_inline_styles(segment)
+            for segment in segments
+        )
+
     html = LINK_PATTERN.sub(replace_link, escaped_text)
     html = WIKI_LINK_PATTERN.sub(replace_wiki_link, html)
-    return auto_link_text_segments(html)
+    html = auto_link_text_segments(html)
+    return style_text_segments(html)
 
 
 def build_canvas_wiki_links(
@@ -220,6 +238,33 @@ def render_qrcode_block(text: str) -> str:
     )
 
 
+def render_blockquote(
+    quote_lines: list[str],
+    wiki_link_index: dict[str, Path],
+    current_target: Path,
+) -> str:
+    content = "<br>\n".join(
+        transform_inline_markdown(line, wiki_link_index, current_target)
+        for line in quote_lines
+    )
+    return f"<blockquote>\n<p>{content}</p>\n</blockquote>"
+
+
+def render_task_item(
+    checked: bool,
+    text: str,
+    wiki_link_index: dict[str, Path],
+    current_target: Path,
+) -> str:
+    checked_attribute = " checked" if checked else ""
+    content = transform_inline_markdown(text, wiki_link_index, current_target)
+    return (
+        '<p class="task-list-item">'
+        f'<input type="checkbox" disabled{checked_attribute}> '
+        f"{content}</p>"
+    )
+
+
 def markdown_to_html(
     markdown: str,
     page_title: str,
@@ -285,6 +330,33 @@ def markdown_to_html(
 
             math = escape("\n".join(math_lines))
             html_lines.append(f'<div class="math-block">$$\n{math}\n$$</div>')
+            continue
+
+        if stripped_line == "---":
+            html_lines.append("<hr>")
+            index += 1
+            continue
+
+        task_match = re.match(r"^-\s+\[([ xX])\]\s+(.*)$", stripped_line)
+        if task_match:
+            html_lines.append(
+                render_task_item(
+                    task_match.group(1).lower() == "x",
+                    task_match.group(2),
+                    wiki_link_index,
+                    current_target,
+                )
+            )
+            index += 1
+            continue
+
+        if stripped_line.startswith(">"):
+            quote_lines: list[str] = []
+            while index < len(lines) and lines[index].strip().startswith(">"):
+                quote_line = re.sub(r"^\s*>\s?", "", lines[index])
+                quote_lines.append(quote_line)
+                index += 1
+            html_lines.append(render_blockquote(quote_lines, wiki_link_index, current_target))
             continue
 
         next_index = index + 1
@@ -440,6 +512,9 @@ def create_css_file(output_dir: Path) -> Path:
   --missing-color: #9a3412;
   --border-color: #ddd;
   --soft-bg: #f5f5f5;
+  --mark-bg: #fff3a3;
+  --quote-bg: #f8f9fb;
+  --quote-border: #8aa4c8;
   --button-bg: #f5f5f5;
   --button-hover-bg: #eaeaea;
   --button-border: #bbb;
@@ -454,6 +529,9 @@ def create_css_file(output_dir: Path) -> Path:
   --missing-color: #f0a56b;
   --border-color: #3b3f45;
   --soft-bg: #20242a;
+  --mark-bg: #6b5d21;
+  --quote-bg: #1d2228;
+  --quote-border: #6f8fbd;
   --button-bg: #252a31;
   --button-hover-bg: #303740;
   --button-border: #555d68;
@@ -495,6 +573,41 @@ a {
 
 p {
   margin: 0 0 1em;
+}
+
+mark {
+  padding: 0 0.15em;
+  background: var(--mark-bg);
+  color: inherit;
+}
+
+hr {
+  margin: 2em 0;
+  border: 0;
+  border-top: 1px solid var(--border-color);
+}
+
+blockquote {
+  margin: 0 0 1.5em;
+  padding: 0.75em 1em;
+  color: var(--text-color);
+  background: var(--quote-bg);
+  border-left: 4px solid var(--quote-border);
+}
+
+blockquote p {
+  margin: 0;
+}
+
+.task-list-item {
+  display: flex;
+  gap: 0.5em;
+  align-items: baseline;
+}
+
+.task-list-item input[type="checkbox"] {
+  flex: 0 0 auto;
+  transform: translateY(0.1em);
 }
 
 .math-block {
@@ -762,6 +875,33 @@ def create_mode_js_file(output_dir: Path) -> Path:
     return js_file
 
 
+def ensure_src_lib_assets(project_dir: Path, output_dir: Path) -> None:
+    src_lib_dir = project_dir / SRC_LIB_DIRECTORY
+    if not src_lib_dir.is_dir():
+        return
+
+    output_dir.mkdir(exist_ok=True)
+
+    for source_path in src_lib_dir.rglob("*"):
+        if not source_path.is_file() or source_path.name == "index_include.html":
+            continue
+
+        target_path = output_dir / source_path.relative_to(src_lib_dir)
+        if target_path.exists():
+            continue
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+
+
+def read_index_include(project_dir: Path) -> str:
+    include_file = project_dir / SRC_LIB_DIRECTORY / "index_include.html"
+    if not include_file.is_file():
+        return ""
+
+    return include_file.read_text(encoding="utf-8").strip()
+
+
 def sort_paths(paths: list[Path]) -> list[Path]:
     return sorted(paths, key=lambda path: path.name.casefold())
 
@@ -838,7 +978,7 @@ def render_index_tree(directory: Path, output_dir: Path, depth: int = 0) -> str:
     return "\n".join(lines)
 
 
-def create_export_index(output_dir: Path, css_file: Path) -> Path:
+def create_export_index(project_dir: Path, output_dir: Path, css_file: Path) -> Path:
     index_file = output_dir / "index.html"
     css_href = os.path.relpath(css_file, start=index_file.parent).replace("\\", "/")
     mode_js_file = create_mode_js_file(output_dir)
@@ -850,6 +990,8 @@ def create_export_index(output_dir: Path, css_file: Path) -> Path:
     directory_count, file_count = count_export_items(output_dir)
     created_at = datetime.now().strftime("%Y-%m-%d | %H:%M")
     tree = render_index_tree(output_dir, output_dir)
+    index_include = read_index_include(project_dir)
+    include_html = f'<div class="index-include">{index_include}</div>\n' if index_include else ""
 
     html = (
         "<!doctype html>\n"
@@ -864,6 +1006,7 @@ def create_export_index(output_dir: Path, css_file: Path) -> Path:
         "<body class=\"index-page\">\n"
         '<button type="button" class="mode-toggle" data-mode-toggle>dark</button>\n'
         "<h1>Exported files</h1>\n"
+        f"{include_html}"
         "<p class=\"index-meta\">"
         f"The index contains {directory_count} directories and {file_count} files. "
         f"Created at {escape(created_at)}."
@@ -916,6 +1059,7 @@ def transform_markdown_to_html(
     output_dir: Path,
     link_paths: list[Path] | None = None,
 ) -> None:
+    ensure_src_lib_assets(project_dir, output_dir)
     output_dir.mkdir(exist_ok=True)
     css_file = create_css_file(output_dir)
     math_js_file = create_math_js_file(output_dir)
@@ -1033,6 +1177,7 @@ def transform_sources_to_html(
     project_dir: Path,
     output_dir: Path,
 ) -> None:
+    ensure_src_lib_assets(project_dir, output_dir)
     css_file = create_css_file(output_dir)
     transform_markdown_to_html(
         markdown_paths,
@@ -1045,7 +1190,7 @@ def transform_sources_to_html(
         markdown_paths + canvas_paths, source_dir, output_dir
     )
     transform_canvas_to_html(canvas_paths, source_dir, output_dir, wiki_link_index)
-    index_file = create_export_index(output_dir, css_file)
+    index_file = create_export_index(project_dir, output_dir, css_file)
     print(f"Created index: {safe_display(index_file)}")
 
 
