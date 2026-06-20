@@ -2,6 +2,8 @@
 
 Offline Obsidian Markdown and Canvas exporter for a local notes vault.
 
+Version: `0.2 | 2026-06`
+
 The project reads source files from `src/` and writes a static HTML export to
 `html/`. It is intentionally simple: no web service, no build server, and no
 external runtime dependency for viewing the generated pages.
@@ -10,9 +12,9 @@ external runtime dependency for viewing the generated pages.
 
 - Export Markdown files from `src/**/*.md` to matching `html/**/*.html` files.
 - Generate a structured `html/index.html` with expandable folders.
-- Convert common Markdown blocks: headings, paragraphs, tables, code blocks,
-  Markdown links, bare `http(s)` URLs, and Obsidian wiki links such as
-  `[[note]]` and `[[note|label]]`.
+- Convert common Markdown blocks: headings, paragraphs, unordered lists,
+  task checkboxes, tables, code blocks, Markdown links, bare `http(s)` URLs,
+  and Obsidian wiki links such as `[[note]]` and `[[note|label]]`.
 - Detect ambiguous wiki links and avoid silently creating the wrong link.
 - Render math with local KaTeX files.
 - Render QR code blocks with local JavaScript helpers.
@@ -30,6 +32,8 @@ html/                 Generated static HTML export
 html/css/             Generated and/or local CSS helpers
 html/js/              Local JavaScript helpers and vendored libraries
 py_md_transform.py    Main export script
+src_lib/md_obs_parser.py
+                     Reusable Markdown/Obsidian parser helpers
 ABOUT_py_md_trans.md  Project notes and local collaboration rules
 ```
 

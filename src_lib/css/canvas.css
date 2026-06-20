@@ -41,18 +41,18 @@ body {
   min-width: 100vw;
   min-height: 100vh;
   overflow: auto;
-  padding: 40px;
+  padding: 28px;
 }
 
 .canvas {
   position: relative;
   min-width: 100%;
-  min-height: calc(100vh - 80px);
+  min-height: calc(100vh - 56px);
 }
 
 .empty-canvas {
   display: grid;
-  min-height: calc(100vh - 80px);
+  min-height: calc(100vh - 56px);
   place-items: center;
   color: var(--muted);
   font-weight: 650;
@@ -78,8 +78,8 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: 6px;
+  padding: 10px 12px;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -87,13 +87,44 @@ body {
   box-shadow: 0 10px 24px var(--shadow);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.35;
+  line-height: 1.15;
 }
 
 .node.text-node {
   justify-content: center;
   font-size: 16px;
   font-weight: 520;
+}
+
+.node a {
+  color: var(--link-color);
+  border-radius: 3px;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: color 120ms ease, background-color 120ms ease, text-decoration-thickness 120ms ease;
+}
+
+.node a:hover {
+  color: var(--link-hover-color);
+  background: var(--link-hover-bg);
+  text-decoration-thickness: 2px;
+}
+
+.wiki-link-missing {
+  color: var(--missing-color);
+  border-bottom: 1px dotted currentColor;
+}
+
+.canvas-task-item {
+  display: inline-flex;
+  gap: 0.35em;
+  align-items: baseline;
+}
+
+.canvas-task-item input[type="checkbox"] {
+  flex: 0 0 auto;
+  transform: translateY(0.1em);
 }
 
 .node.file-node {
@@ -103,7 +134,7 @@ body {
 
 .file-header {
   flex: 0 0 auto;
-  padding: 12px 14px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--file-header);
   font-size: 13px;
@@ -112,7 +143,7 @@ body {
 }
 
 .file-body {
-  padding: 14px;
+  padding: 10px;
   color: var(--muted);
   font-size: 14px;
 }

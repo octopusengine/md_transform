@@ -10,6 +10,10 @@
   --file-header-text: #e9edf2;
   --text: #f0f3f6;
   --muted: #b4bdc8;
+  --link-color: #8ab4f8;
+  --link-hover-color: #aecbfa;
+  --link-hover-bg: rgba(138, 180, 248, 0.14);
+  --missing-color: #f0a56b;
   --border: #454d57;
   --shadow: rgba(0, 0, 0, 0.38);
   --control-bg: #24282d;

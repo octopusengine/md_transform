@@ -3,7 +3,8 @@
     padding: 40,
     canvasSelector: "#canvas",
     fallbackDataSelector: "#fallback-canvas-data",
-    center: true
+    center: true,
+    wikiLinks: {}
   };
 
   async function loadCanvasData(url, options = {}) {
@@ -98,20 +99,112 @@
     return bounds;
   }
 
-  function createTextNode(node) {
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#39;"
+    }[character]));
+  }
+
+  function normalizeLinkKey(value) {
+    return String(value).trim().replace(/\.md$/i, "").toLowerCase();
+  }
+
+  function resolveWikiLink(target, wikiLinks) {
+    return wikiLinks[normalizeLinkKey(target)] || null;
+  }
+
+  function autoLinkTextSegments(value) {
+    const segments = value.split(/(<a\b[^>]*>.*?<\/a>)/gi);
+    return segments.map((segment) => {
+      if (segment.toLowerCase().startsWith("<a")) {
+        return segment;
+      }
+
+      return segment.replace(
+        /(^|[^"'=])(https?:\/\/[^\s<>()]+[^\s<>().,;:!?])/g,
+        (_match, prefix, url) => {
+          const safeUrl = escapeHtml(url);
+          return `${prefix}<a href="${safeUrl}">${safeUrl}</a>`;
+        }
+      );
+    }).join("");
+  }
+
+  function transformInlineText(text, wikiLinks) {
+    let html = escapeHtml(text || "");
+
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => {
+      return `<a href="${escapeHtml(url)}">${label}</a>`;
+    });
+
+    html = html.replace(/\[\[([^\]]+)\]\]/g, (_match, rawLink) => {
+      const [rawTarget, ...labelParts] = rawLink.trim().split("|");
+      const target = rawTarget.trim();
+      const label = labelParts.join("|").trim() || target;
+      const href = resolveWikiLink(target, wikiLinks);
+
+      if (!href) {
+        return `<span class="wiki-link-missing">${escapeHtml(label)}</span>`;
+      }
+
+      return `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+    });
+
+    return autoLinkTextSegments(html);
+  }
+
+  function transformTextLine(line, wikiLinks) {
+    const taskMatch = /^-\s+\[([ xX])\](?:\s+(.*))?$/.exec(line);
+
+    if (taskMatch) {
+      const checkedAttribute = taskMatch[1].toLowerCase() === "x" ? " checked" : "";
+      const content = transformInlineText(taskMatch[2] || "", wikiLinks);
+      return (
+        `<span class="canvas-task-item">` +
+        `<input type="checkbox" disabled${checkedAttribute}> ` +
+        `<span>${content}</span>` +
+        `</span>`
+      );
+    }
+
+    return transformInlineText(line, wikiLinks);
+  }
+
+  function transformInlineMarkdown(text, wikiLinks) {
+    return String(text || "")
+      .split(/\r?\n/)
+      .map((line) => transformTextLine(line, wikiLinks))
+      .join("\n");
+  }
+
+  function createTextNode(node, options) {
     const element = document.createElement("article");
     element.className = `node text-node${node.color ? ` color-${node.color}` : ""}`;
-    element.textContent = node.text || "";
+    element.innerHTML = transformInlineMarkdown(node.text || "", options.wikiLinks || {});
     return element;
   }
 
-  function createFileNode(node) {
+  function createFileNode(node, options) {
     const element = document.createElement("article");
     element.className = "node file-node";
 
     const header = document.createElement("div");
     header.className = "file-header";
-    header.textContent = node.file || "Untitled file";
+    const fileName = node.file || "Untitled file";
+    const href = resolveWikiLink(fileName, options.wikiLinks || {});
+
+    if (href) {
+      const link = document.createElement("a");
+      link.href = href;
+      link.textContent = fileName;
+      header.appendChild(link);
+    } else {
+      header.textContent = fileName;
+    }
 
     const body = document.createElement("div");
     body.className = "file-body";
@@ -207,7 +300,9 @@
     canvas.appendChild(svg);
 
     for (const node of normalizedNodes.values()) {
-      const element = node.type === "file" ? createFileNode(node) : createTextNode(node);
+      const element = node.type === "file"
+        ? createFileNode(node, settings)
+        : createTextNode(node, settings);
       element.style.left = `${node.x}px`;
       element.style.top = `${node.y}px`;
       element.style.width = `${node.width}px`;

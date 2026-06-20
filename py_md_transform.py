@@ -2,32 +2,20 @@ from html import escape
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 from datetime import datetime
 from urllib.parse import quote
 
+from src_lib import md_obs_parser
 
-LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]]+)\]\]")
-AUTO_LINK_PATTERN = re.compile(r"(?<![\"'=])\bhttps?://[^\s<>()]+[^\s<>().,;:!?]")
+
 INDEX_IGNORED_DIRECTORIES = {"css", "js"}
 SRC_LIB_DIRECTORY = "src_lib"
+APP_VERSION = "0.2 | 2026-06"
 
 
 def safe_display(value: object) -> str:
     return str(value).encode("ascii", errors="backslashreplace").decode("ascii")
-
-
-def normalize_link_key(value: str) -> str:
-    return value.strip().removesuffix(".md").lower()
-
-
-def html_target_relative_path(path: Path) -> Path:
-    if path.suffix.lower() == ".canvas":
-        return path.with_name(f"{path.stem}_canvas.html")
-
-    return path.with_suffix(".html")
 
 
 def find_markdown_files(root: Path, output_dir: Path) -> list[Path]:
@@ -52,381 +40,6 @@ def print_affected_directories(paths: list[Path], root: Path) -> None:
     print("Directories affected by the export:")
     for directory in directories:
         print(f"- {safe_display(directory.relative_to(root))}")
-
-
-def build_wiki_link_index(
-    paths: list[Path],
-    source_dir: Path,
-    output_dir: Path,
-) -> tuple[dict[str, Path], set[str]]:
-    candidates: dict[str, list[Path]] = {}
-
-    for path in paths:
-        relative_path = path.relative_to(source_dir)
-        target = output_dir / html_target_relative_path(relative_path)
-        relative_source = path.relative_to(source_dir).with_suffix("")
-
-        keys = {
-            normalize_link_key(path.stem),
-            normalize_link_key(relative_source.as_posix()),
-            normalize_link_key(str(relative_source).replace("\\", "/")),
-        }
-
-        if path.suffix.lower() == ".canvas":
-            canvas_relative_source = relative_source.with_name(
-                f"{relative_source.name}_canvas"
-            )
-            keys.update(
-                {
-                    normalize_link_key(f"{path.stem}_canvas"),
-                    normalize_link_key(f"{path.stem}.canvas"),
-                    normalize_link_key(canvas_relative_source.as_posix()),
-                    normalize_link_key(str(canvas_relative_source).replace("\\", "/")),
-                    normalize_link_key(str(path.relative_to(source_dir)).replace("\\", "/")),
-                }
-            )
-
-        for key in keys:
-            candidates.setdefault(key, []).append(target)
-
-    link_index: dict[str, Path] = {}
-    ambiguous_links: set[str] = set()
-
-    for key, targets in candidates.items():
-        unique_targets = sorted(set(targets))
-        if len(unique_targets) == 1:
-            link_index[key] = unique_targets[0]
-        else:
-            ambiguous_links.add(key)
-
-    return link_index, ambiguous_links
-
-
-def transform_inline_markdown(
-    text: str,
-    wiki_link_index: dict[str, Path],
-    current_target: Path,
-) -> str:
-    escaped_text = escape(text)
-
-    def replace_link(match: re.Match[str]) -> str:
-        label = match.group(1)
-        url = match.group(2)
-        return f'<a href="{url}">{label}</a>'
-
-    def replace_wiki_link(match: re.Match[str]) -> str:
-        raw_link = match.group(1).strip()
-        link_target, _, label = raw_link.partition("|")
-        label = label.strip() or link_target.strip()
-        key = normalize_link_key(link_target)
-        target = wiki_link_index.get(key)
-
-        if target is None:
-            return f'<span class="wiki-link-missing">{escape(label)}</span>'
-
-        href = os.path.relpath(target, start=current_target.parent).replace("\\", "/")
-        return f'<a href="{escape(href)}">{escape(label)}</a>'
-
-    def replace_auto_link(match: re.Match[str]) -> str:
-        url = match.group(0)
-        safe_url = escape(url, quote=True)
-        return f'<a href="{safe_url}">{safe_url}</a>'
-
-    def auto_link_text_segments(value: str) -> str:
-        segments = re.split(r"(<a\b[^>]*>.*?</a>)", value, flags=re.IGNORECASE)
-        return "".join(
-            segment
-            if segment.lower().startswith("<a")
-            else AUTO_LINK_PATTERN.sub(replace_auto_link, segment)
-            for segment in segments
-        )
-
-    def apply_basic_inline_styles(value: str) -> str:
-        value = re.sub(r"==(.+?)==", r"<mark>\1</mark>", value)
-        value = re.sub(r"(?<!\*)\*\*\*(?!\s)(.+?)(?<!\s)\*\*\*(?!\*)", r"<strong><em>\1</em></strong>", value)
-        value = re.sub(r"(?<!\*)\*\*(?!\s)(.+?)(?<!\s)\*\*(?!\*)", r"<strong>\1</strong>", value)
-        value = re.sub(r"(?<!\*)\*(?![\s*])(.+?)(?<![\s*])\*(?!\*)", r"<em>\1</em>", value)
-        return value
-
-    def style_text_segments(value: str) -> str:
-        segments = re.split(r"(<a\b[^>]*>.*?</a>)", value, flags=re.IGNORECASE)
-        return "".join(
-            segment
-            if segment.lower().startswith("<a")
-            else apply_basic_inline_styles(segment)
-            for segment in segments
-        )
-
-    html = LINK_PATTERN.sub(replace_link, escaped_text)
-    html = WIKI_LINK_PATTERN.sub(replace_wiki_link, html)
-    html = auto_link_text_segments(html)
-    return style_text_segments(html)
-
-
-def build_canvas_wiki_links(
-    wiki_link_index: dict[str, Path],
-    current_target: Path,
-) -> dict[str, str]:
-    return {
-        key: os.path.relpath(target, start=current_target.parent).replace("\\", "/")
-        for key, target in wiki_link_index.items()
-    }
-
-
-def is_table_row(line: str) -> bool:
-    stripped_line = line.strip()
-    return stripped_line.startswith("|") and stripped_line.endswith("|")
-
-
-def is_table_separator(line: str) -> bool:
-    if not is_table_row(line):
-        return False
-
-    cells = parse_table_row(line)
-    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
-
-
-def parse_table_row(line: str) -> list[str]:
-    stripped_line = line.strip()
-    if stripped_line.startswith("|"):
-        stripped_line = stripped_line[1:]
-    if stripped_line.endswith("|"):
-        stripped_line = stripped_line[:-1]
-
-    return [cell.strip() for cell in stripped_line.split("|")]
-
-
-def render_table(
-    headers: list[str],
-    rows: list[list[str]],
-    wiki_link_index: dict[str, Path],
-    current_target: Path,
-) -> str:
-    header_cells = "".join(
-        f"<th>{transform_inline_markdown(header, wiki_link_index, current_target)}</th>"
-        for header in headers
-    )
-    table_lines = ["<table>", "<thead>", f"<tr>{header_cells}</tr>", "</thead>"]
-
-    if rows:
-        table_lines.append("<tbody>")
-        for row in rows:
-            normalized_row = row[: len(headers)] + [""] * max(0, len(headers) - len(row))
-            body_cells = "".join(
-                f"<td>{transform_inline_markdown(cell, wiki_link_index, current_target)}</td>"
-                for cell in normalized_row
-            )
-            table_lines.append(f"<tr>{body_cells}</tr>")
-        table_lines.append("</tbody>")
-
-    table_lines.append("</table>")
-    return "\n".join(table_lines)
-
-
-def render_qrcode_block(text: str) -> str:
-    qrcode_json = json.dumps(text, ensure_ascii=False).replace("</", "<\\/")
-    return (
-        '<div class="qrcode-block">'
-        '<div class="qrcode-output" aria-label="QR code"></div>'
-        '<script type="application/json" class="qrcode-data">'
-        f"{qrcode_json}"
-        "</script>"
-        '<noscript><pre class="qrcode-source">'
-        f"{escape(text)}"
-        "</pre></noscript>"
-        "</div>"
-    )
-
-
-def render_blockquote(
-    quote_lines: list[str],
-    wiki_link_index: dict[str, Path],
-    current_target: Path,
-) -> str:
-    content = "<br>\n".join(
-        transform_inline_markdown(line, wiki_link_index, current_target)
-        for line in quote_lines
-    )
-    return f"<blockquote>\n<p>{content}</p>\n</blockquote>"
-
-
-def render_task_item(
-    checked: bool,
-    text: str,
-    wiki_link_index: dict[str, Path],
-    current_target: Path,
-) -> str:
-    checked_attribute = " checked" if checked else ""
-    content = transform_inline_markdown(text, wiki_link_index, current_target)
-    return (
-        '<p class="task-list-item">'
-        f'<input type="checkbox" disabled{checked_attribute}> '
-        f"{content}</p>"
-    )
-
-
-def markdown_to_html(
-    markdown: str,
-    page_title: str,
-    css_href: str,
-    mode_js_href: str,
-    katex_css_href: str,
-    katex_js_href: str,
-    auto_render_js_href: str,
-    math_js_href: str,
-    qrcode_js_href: str,
-    md_qrcode_js_href: str,
-    wiki_link_index: dict[str, Path],
-    current_target: Path,
-) -> str:
-    lines = markdown.splitlines()
-    html_lines: list[str] = [f"<h1>{escape(page_title)}</h1>"]
-    in_code_block = False
-    code_block_language = ""
-    code_lines: list[str] = []
-    index = 0
-
-    while index < len(lines):
-        line = lines[index]
-        stripped_line = line.strip()
-
-        if stripped_line.startswith("```"):
-            if in_code_block:
-                code = "\n".join(code_lines)
-                if code_block_language == "qrcode":
-                    html_lines.append(render_qrcode_block(code))
-                else:
-                    html_lines.append(f"<code>{escape(code)}</code>")
-                code_lines = []
-                code_block_language = ""
-                in_code_block = False
-            else:
-                in_code_block = True
-                code_block_info = stripped_line[3:].strip().split(maxsplit=1)
-                code_block_language = code_block_info[0].lower() if code_block_info else ""
-                code_lines = []
-            index += 1
-            continue
-
-        if in_code_block:
-            code_lines.append(line)
-            index += 1
-            continue
-
-        if not stripped_line:
-            index += 1
-            continue
-
-        if stripped_line == "$$":
-            math_lines: list[str] = []
-            index += 1
-
-            while index < len(lines) and lines[index].strip() != "$$":
-                math_lines.append(lines[index])
-                index += 1
-
-            if index < len(lines) and lines[index].strip() == "$$":
-                index += 1
-
-            math = escape("\n".join(math_lines))
-            html_lines.append(f'<div class="math-block">$$\n{math}\n$$</div>')
-            continue
-
-        if stripped_line == "---":
-            html_lines.append("<hr>")
-            index += 1
-            continue
-
-        task_match = re.match(r"^-\s+\[([ xX])\]\s+(.*)$", stripped_line)
-        if task_match:
-            html_lines.append(
-                render_task_item(
-                    task_match.group(1).lower() == "x",
-                    task_match.group(2),
-                    wiki_link_index,
-                    current_target,
-                )
-            )
-            index += 1
-            continue
-
-        if stripped_line.startswith(">"):
-            quote_lines: list[str] = []
-            while index < len(lines) and lines[index].strip().startswith(">"):
-                quote_line = re.sub(r"^\s*>\s?", "", lines[index])
-                quote_lines.append(quote_line)
-                index += 1
-            html_lines.append(render_blockquote(quote_lines, wiki_link_index, current_target))
-            continue
-
-        next_index = index + 1
-        while next_index < len(lines) and not lines[next_index].strip():
-            next_index += 1
-
-        if (
-            is_table_row(line)
-            and next_index < len(lines)
-            and is_table_separator(lines[next_index])
-        ):
-            headers = parse_table_row(line)
-            rows: list[list[str]] = []
-            index = next_index + 1
-
-            while index < len(lines):
-                if not lines[index].strip():
-                    index += 1
-                    continue
-                if not is_table_row(lines[index]):
-                    break
-                rows.append(parse_table_row(lines[index]))
-                index += 1
-
-            html_lines.append(render_table(headers, rows, wiki_link_index, current_target))
-            continue
-
-        heading_match = re.match(r"^(#{1,6})\s+(.+)$", stripped_line)
-        if heading_match:
-            level = len(heading_match.group(1))
-            content = transform_inline_markdown(
-                heading_match.group(2), wiki_link_index, current_target
-            )
-            html_lines.append(f"<h{level}>{content}</h{level}>")
-            index += 1
-            continue
-
-        content = transform_inline_markdown(stripped_line, wiki_link_index, current_target)
-        html_lines.append(f"<p>{content}</p>")
-        index += 1
-
-    if in_code_block:
-        code = "\n".join(code_lines)
-        if code_block_language == "qrcode":
-            html_lines.append(render_qrcode_block(code))
-        else:
-            html_lines.append(f"<code>{escape(code)}</code>")
-
-    body = "\n".join(html_lines)
-    return (
-        "<!doctype html>\n"
-        "<html>\n"
-        "<head>\n"
-        '  <meta charset="utf-8">\n'
-        f"  <title>{escape(page_title)}</title>\n"
-        f'  <script src="{mode_js_href}"></script>\n'
-        f'  <link rel="stylesheet" href="{css_href}">\n'
-        f'  <link rel="stylesheet" href="{katex_css_href}">\n'
-        f'  <script defer src="{katex_js_href}"></script>\n'
-        f'  <script defer src="{auto_render_js_href}"></script>\n'
-        f'  <script defer src="{math_js_href}"></script>\n'
-        f'  <script defer src="{qrcode_js_href}"></script>\n'
-        f'  <script defer src="{md_qrcode_js_href}"></script>\n'
-        "</head>\n"
-        "<body>\n"
-        '<button type="button" class="mode-toggle" data-mode-toggle>dark</button>\n'
-        f"{body}\n"
-        "</body>\n"
-        "</html>\n"
-    )
 
 
 def canvas_to_html(
@@ -509,6 +122,8 @@ def create_css_file(output_dir: Path) -> Path:
   --text-color: #222;
   --muted-color: #555;
   --link-color: #0645ad;
+  --link-hover-color: #0b57d0;
+  --link-hover-bg: rgba(11, 87, 208, 0.08);
   --missing-color: #9a3412;
   --border-color: #ddd;
   --soft-bg: #f5f5f5;
@@ -526,6 +141,8 @@ def create_css_file(output_dir: Path) -> Path:
   --text-color: #e7e3dc;
   --muted-color: #afa89f;
   --link-color: #8ab4f8;
+  --link-hover-color: #aecbfa;
+  --link-hover-bg: rgba(138, 180, 248, 0.14);
   --missing-color: #f0a56b;
   --border-color: #3b3f45;
   --soft-bg: #20242a;
@@ -542,7 +159,7 @@ body {
   margin: 40px auto;
   padding: 0 20px;
   font-family: Arial, sans-serif;
-  line-height: 1.6;
+  line-height: 1.25;
   color: var(--text-color);
   background: var(--page-bg);
 }
@@ -553,8 +170,8 @@ h3,
 h4,
 h5,
 h6 {
-  line-height: 1.25;
-  margin: 1.4em 0 0.5em;
+  line-height: 1.15;
+  margin: 1em 0 0.35em;
 }
 
 h1 {
@@ -564,6 +181,16 @@ h1 {
 
 a {
   color: var(--link-color);
+  border-radius: 3px;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: color 120ms ease, background-color 120ms ease, text-decoration-thickness 120ms ease;
+}
+
+a:hover {
+  color: var(--link-hover-color);
+  background: var(--link-hover-bg);
+  text-decoration-thickness: 2px;
 }
 
 .wiki-link-missing {
@@ -572,7 +199,16 @@ a {
 }
 
 p {
-  margin: 0 0 1em;
+  margin: 0 0 0.35em;
+}
+
+ul {
+  margin: 0 0 0.55em 1.25em;
+  padding: 0;
+}
+
+li {
+  margin: 0.12em 0;
 }
 
 mark {
@@ -582,14 +218,14 @@ mark {
 }
 
 hr {
-  margin: 2em 0;
+  margin: 1.2em 0;
   border: 0;
   border-top: 1px solid var(--border-color);
 }
 
 blockquote {
-  margin: 0 0 1.5em;
-  padding: 0.75em 1em;
+  margin: 0 0 0.7em;
+  padding: 0.45em 0.75em;
   color: var(--text-color);
   background: var(--quote-bg);
   border-left: 4px solid var(--quote-border);
@@ -601,7 +237,7 @@ blockquote p {
 
 .task-list-item {
   display: flex;
-  gap: 0.5em;
+  gap: 0.35em;
   align-items: baseline;
 }
 
@@ -612,13 +248,13 @@ blockquote p {
 
 .math-block {
   overflow-x: auto;
-  margin: 0 0 1.5em;
+  margin: 0 0 0.75em;
 }
 
 .qrcode-block {
   display: inline-block;
-  margin: 0 0 1.5em;
-  padding: 12px;
+  margin: 0 0 0.75em;
+  padding: 8px;
   background: #fff;
   border: 1px solid var(--border-color);
 }
@@ -636,8 +272,8 @@ blockquote p {
 code {
   display: block;
   white-space: pre-wrap;
-  margin: 0 0 1em;
-  padding: 12px;
+  margin: 0 0 0.7em;
+  padding: 8px;
   font-family: Consolas, monospace;
   background: var(--soft-bg);
   border: 1px solid var(--border-color);
@@ -645,13 +281,13 @@ code {
 
 table {
   width: 100%;
-  margin: 0 0 1.5em;
+  margin: 0 0 0.8em;
   border-collapse: collapse;
 }
 
 th,
 td {
-  padding: 8px 10px;
+  padding: 5px 7px;
   text-align: left;
   border: 1px solid var(--border-color);
 }
@@ -883,13 +519,16 @@ def ensure_src_lib_assets(project_dir: Path, output_dir: Path) -> None:
     output_dir.mkdir(exist_ok=True)
 
     for source_path in src_lib_dir.rglob("*"):
-        if not source_path.is_file() or source_path.name == "index_include.html":
+        if "__pycache__" in source_path.parts:
+            continue
+        if (
+            not source_path.is_file()
+            or source_path.name == "index_include.html"
+            or source_path.suffix == ".py"
+        ):
             continue
 
         target_path = output_dir / source_path.relative_to(src_lib_dir)
-        if target_path.exists():
-            continue
-
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, target_path)
 
@@ -1069,7 +708,7 @@ def transform_markdown_to_html(
     katex_js_file = output_dir / "js" / "katex" / "katex.min.js"
     auto_render_js_file = output_dir / "js" / "katex" / "auto-render.min.js"
     qrcode_js_file = output_dir / "js" / "qrcode.js"
-    wiki_link_index, ambiguous_links = build_wiki_link_index(
+    wiki_link_index, ambiguous_links = md_obs_parser.build_wiki_link_index(
         link_paths or paths, source_dir, output_dir
     )
 
@@ -1079,7 +718,7 @@ def transform_markdown_to_html(
             print(f"- {safe_display(link)}")
 
     for path in paths:
-        relative_path = html_target_relative_path(path.relative_to(source_dir))
+        relative_path = md_obs_parser.html_target_relative_path(path.relative_to(source_dir))
         target = output_dir / relative_path
         css_href = os.path.relpath(css_file, start=target.parent).replace("\\", "/")
         mode_js_href = os.path.relpath(mode_js_file, start=target.parent).replace(
@@ -1103,7 +742,7 @@ def transform_markdown_to_html(
         ).replace("\\", "/")
 
         target.parent.mkdir(parents=True, exist_ok=True)
-        html = markdown_to_html(
+        html = md_obs_parser.markdown_to_html(
             path.read_text(encoding="utf-8"),
             path.stem,
             css_href,
@@ -1137,7 +776,7 @@ def transform_canvas_to_html(
 
     for path in paths:
         relative_canvas_path = path.relative_to(source_dir)
-        relative_html_path = html_target_relative_path(relative_canvas_path)
+        relative_html_path = md_obs_parser.html_target_relative_path(relative_canvas_path)
         canvas_target = output_dir / relative_canvas_path
         html_target = output_dir / relative_html_path
 
@@ -1164,7 +803,7 @@ def transform_canvas_to_html(
             canvas_css_href,
             canvas_js_href,
             canvas_data_href,
-            build_canvas_wiki_links(wiki_link_index, html_target),
+            md_obs_parser.build_canvas_wiki_links(wiki_link_index, html_target),
         )
         html_target.write_text(html, encoding="utf-8")
         print(f"Canvas transformed: {safe_display(path)} -> {safe_display(html_target)}")
@@ -1186,7 +825,7 @@ def transform_sources_to_html(
         output_dir,
         markdown_paths + canvas_paths,
     )
-    wiki_link_index, _ambiguous_links = build_wiki_link_index(
+    wiki_link_index, _ambiguous_links = md_obs_parser.build_wiki_link_index(
         markdown_paths + canvas_paths, source_dir, output_dir
     )
     transform_canvas_to_html(canvas_paths, source_dir, output_dir, wiki_link_index)
@@ -1205,6 +844,7 @@ if __name__ == "__main__":
     if not source_files:
         print("No *.md or *.canvas files found.")
     else:
+        print(f"py_md_transform {APP_VERSION}")
         print_affected_directories(source_files, source_directory)
         answer = input("Run export? [yes/no]: ").strip().lower()
 
