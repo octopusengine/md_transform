@@ -10,6 +10,28 @@ WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]]+)\]\]")
 AUTO_LINK_PATTERN = re.compile(r"(?<![\"'=])\bhttps?://[^\s<>()]+[^\s<>().,;:!?]")
 TASK_ITEM_PATTERN = re.compile(r"^-\s+\[([ xX])\](?:\s+(.*))?$")
 UNORDERED_LIST_ITEM_PATTERN = re.compile(r"^-\s+(?!\[[ xX]\](?:\s|$))(.+)$")
+CALLOUT_PATTERN = re.compile(r"^\[!([A-Za-z]+)\][+-]?\s*(.*)$")
+CALLOUT_TYPES = {
+    "note",
+    "abstract",
+    "info",
+    "todo",
+    "tip",
+    "success",
+    "question",
+    "warning",
+    "failure",
+    "danger",
+    "bug",
+    "example",
+    "quote",
+}
+CHRONOS_COLORS = {"red", "orange", "yellow", "green", "blue", "purple", "pink", "cyan"}
+CHRONOS_ITEM_PATTERN = re.compile(r"^\s*([-@*=~])\s+\[([^\]]+)\]\s*(.*)$")
+CHRONOS_COLOR_PATTERN = re.compile(
+    r"^(?:#|\$)([A-Za-z]+|[0-9A-Fa-f]{3,8})(?=\s|$)\s*"
+)
+CHRONOS_GROUP_PATTERN = re.compile(r"^\{([^}]+)\}\s*")
 
 
 def normalize_link_key(value: str) -> str:
@@ -219,6 +241,105 @@ def render_qrcode_block(text: str) -> str:
     )
 
 
+def parse_chronos_dates(value: str) -> tuple[str, str | None]:
+    if "~" not in value:
+        return value.strip(), None
+
+    start, end = value.split("~", 1)
+    return start.strip(), end.strip() or None
+
+
+def parse_chronos_modifiers(text: str) -> tuple[str | None, str | None, str]:
+    color = None
+    group = None
+    rest = text.strip()
+
+    while rest:
+        color_match = CHRONOS_COLOR_PATTERN.match(rest)
+        if color_match:
+            candidate = color_match.group(1).lower()
+            if candidate in CHRONOS_COLORS or re.fullmatch(r"[0-9a-f]{3,8}", candidate):
+                color = candidate
+                rest = rest[color_match.end() :].strip()
+                continue
+
+        group_match = CHRONOS_GROUP_PATTERN.match(rest)
+        if group_match:
+            group = group_match.group(1).strip()
+            rest = rest[group_match.end() :].strip()
+            continue
+
+        break
+
+    return color, group, rest
+
+
+def parse_chronos_item(line: str) -> dict[str, str | None] | None:
+    match = CHRONOS_ITEM_PATTERN.match(line)
+    if not match:
+        return None
+
+    symbol = match.group(1)
+    start, end = parse_chronos_dates(match.group(2))
+    color, group, content = parse_chronos_modifiers(match.group(3))
+    title, _, description = content.partition("|")
+    item_type = {
+        "-": "event",
+        "@": "period",
+        "*": "point",
+        "=": "marker",
+        "~": "marker",
+    }[symbol]
+
+    if item_type == "point":
+        end = None
+
+    return {
+        "type": item_type,
+        "symbol": symbol,
+        "start": start,
+        "end": end,
+        "color": color,
+        "group": group,
+        "content": title.strip(),
+        "description": description.strip() or None,
+        "raw": line,
+    }
+
+
+def parse_chronos_block(text: str) -> list[dict[str, str | None]]:
+    items: list[dict[str, str | None]] = []
+
+    for line in text.splitlines():
+        stripped_line = line.strip()
+        if not stripped_line or stripped_line.startswith("#") or stripped_line.startswith(">"):
+            continue
+
+        item = parse_chronos_item(stripped_line)
+        if item is not None:
+            items.append(item)
+
+    return items
+
+
+def render_chronos_block(text: str) -> str:
+    payload = json.dumps(
+        {"items": parse_chronos_block(text)},
+        ensure_ascii=False,
+    ).replace("</", "<\\/")
+    return (
+        '<div class="chronos-block chronos-timeline-container">'
+        '<div class="chronos-output" aria-label="Chronos timeline"></div>'
+        '<script type="application/json" class="chronos-data">'
+        f"{payload}"
+        "</script>"
+        '<noscript><pre class="chronos-source">'
+        f"{escape(text)}"
+        "</pre></noscript>"
+        "</div>"
+    )
+
+
 def render_blockquote(
     quote_lines: list[str],
     wiki_link_index: dict[str, Path],
@@ -229,6 +350,33 @@ def render_blockquote(
         for line in quote_lines
     )
     return f"<blockquote>\n<p>{content}</p>\n</blockquote>"
+
+
+def render_callout(
+    callout_type: str,
+    title: str,
+    body_lines: list[str],
+    wiki_link_index: dict[str, Path],
+    current_target: Path,
+) -> str:
+    display_title = title or callout_type.title()
+    title_html = transform_inline_markdown(display_title, wiki_link_index, current_target)
+    body_content = "<br>\n".join(
+        transform_inline_markdown(line, wiki_link_index, current_target)
+        for line in body_lines
+    )
+    body_html = (
+        f'\n<div class="callout-content">\n<p>{body_content}</p>\n</div>'
+        if body_lines
+        else ""
+    )
+    return (
+        f'<div class="callout callout-{callout_type}" data-callout="{callout_type}">\n'
+        '<div class="callout-title"><span class="callout-icon" '
+        f'aria-hidden="true"></span>{title_html}</div>'
+        f"{body_html}\n"
+        "</div>"
+    )
 
 
 def render_task_item(
@@ -269,6 +417,7 @@ def markdown_to_html(
     math_js_href: str,
     qrcode_js_href: str,
     md_qrcode_js_href: str,
+    chronos_js_href: str,
     wiki_link_index: dict[str, Path],
     current_target: Path,
 ) -> str:
@@ -288,6 +437,8 @@ def markdown_to_html(
                 code = "\n".join(code_lines)
                 if code_block_language == "qrcode":
                     html_lines.append(render_qrcode_block(code))
+                elif code_block_language == "chronos":
+                    html_lines.append(render_chronos_block(code))
                 else:
                     html_lines.append(f"<code>{escape(code)}</code>")
                 code_lines = []
@@ -367,7 +518,25 @@ def markdown_to_html(
                 quote_line = re.sub(r"^\s*>\s?", "", lines[index])
                 quote_lines.append(quote_line)
                 index += 1
-            html_lines.append(render_blockquote(quote_lines, wiki_link_index, current_target))
+
+            callout_match = (
+                CALLOUT_PATTERN.match(quote_lines[0]) if quote_lines else None
+            )
+            if callout_match and callout_match.group(1).lower() in CALLOUT_TYPES:
+                callout_type = callout_match.group(1).lower()
+                html_lines.append(
+                    render_callout(
+                        callout_type,
+                        callout_match.group(2).strip(),
+                        quote_lines[1:],
+                        wiki_link_index,
+                        current_target,
+                    )
+                )
+            else:
+                html_lines.append(
+                    render_blockquote(quote_lines, wiki_link_index, current_target)
+                )
             continue
 
         next_index = index + 1
@@ -413,6 +582,8 @@ def markdown_to_html(
         code = "\n".join(code_lines)
         if code_block_language == "qrcode":
             html_lines.append(render_qrcode_block(code))
+        elif code_block_language == "chronos":
+            html_lines.append(render_chronos_block(code))
         else:
             html_lines.append(f"<code>{escape(code)}</code>")
 
@@ -431,6 +602,7 @@ def markdown_to_html(
         f'  <script defer src="{math_js_href}"></script>\n'
         f'  <script defer src="{qrcode_js_href}"></script>\n'
         f'  <script defer src="{md_qrcode_js_href}"></script>\n'
+        f'  <script defer src="{chronos_js_href}"></script>\n'
         "</head>\n"
         "<body>\n"
         '<button type="button" class="mode-toggle" data-mode-toggle>dark</button>\n'
